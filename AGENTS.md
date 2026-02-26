@@ -189,3 +189,5 @@ source/               # C++ source code and tests
 - **ALWAYS run linting before commits**: `ruff check . && ruff format .` or CI will fail
 - **ALWAYS test both Python and C++ components**: Some features require both to be built
 - **ALWAYS follow conventional commit format**: All commit messages and PR titles must use conventional commit specification (`type(scope): description`)
+
+## Know Issues
