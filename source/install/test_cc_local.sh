@@ -42,10 +42,12 @@ fi
 if echo "$CXXFLAGS" | grep -q "sanitize=.*address"; then
     export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
 fi
+# fix cannot find libdeepmd.so
+export LD_LIBRARY_PATH=$(realpath $INSTALL_PREFIX)/lib:$LD_LIBRARY_PATH
 
 # print more info for debug
-env
 export LD_DEBUG=libs
+env | sort
 
 # run unit test
 ctest --output-on-failure
