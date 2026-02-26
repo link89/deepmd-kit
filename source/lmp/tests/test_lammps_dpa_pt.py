@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 import importlib
+import logging
 import os
 import shutil
 import subprocess as sp
@@ -18,6 +19,8 @@ from lammps import (
 from write_lmp_data import (
     write_lmp_data,
 )
+
+log = logging.getLogger(__name__)
 
 pbtxt_file2 = (
     Path(__file__).parent.parent.parent / "tests" / "infer" / "deeppot-1.pbtxt"
@@ -496,12 +499,21 @@ def test_pair_deepmd_type_map(lammps_type_map) -> None:
 
 
 def test_pair_deepmd_type_map_with_null(lammps_type_map) -> None:
+    log.debug("[test_pair_deepmd_type_map_with_null] setting pair_style hybrid/scaled")
     lammps_type_map.pair_style(
         f"hybrid/scaled 0.5 deepmd {pb_file.resolve()} 0.5 deepmd {pb_file.resolve()}"
     )
+    log.debug(
+        "[test_pair_deepmd_type_map_with_null] pair_style set, setting pair_coeff 1"
+    )
     lammps_type_map.pair_coeff("* * deepmd 1 H NULL")
+    log.debug(
+        "[test_pair_deepmd_type_map_with_null] pair_coeff 1 set, setting pair_coeff 2"
+    )
     lammps_type_map.pair_coeff("* * deepmd 2 NULL O")
+    log.debug("[test_pair_deepmd_type_map_with_null] pair_coeff 2 set, calling run(0)")
     lammps_type_map.run(0)
+    log.debug("[test_pair_deepmd_type_map_with_null] run(0) completed successfully")
 
 
 def test_pair_deepmd_real(lammps_real) -> None:

@@ -194,10 +194,17 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
   std::vector<int> datype, fwd_map, bkw_map;
   int nghost_real, nall_real, nloc_real;
   int nall = natoms;
+  std::cerr << "[DeepPotPT::compute] nall=" << nall << " nghost=" << nghost
+            << " ntypes=" << ntypes
+            << " do_message_passing=" << do_message_passing << " ago=" << ago
+            << std::endl;
   select_real_atoms_coord(dcoord, datype, aparam_, nghost_real, fwd_map,
                           bkw_map, nall_real, nloc_real, coord, atype, aparam,
                           nghost, ntypes, 1, daparam, nall, aparam_nall);
   int nloc = nall_real - nghost_real;
+  std::cerr << "[DeepPotPT::compute] nall_real=" << nall_real
+            << " nloc_real=" << nloc_real << " nghost_real=" << nghost_real
+            << std::endl;
   int nframes = 1;
   std::vector<VALUETYPE> coord_wrapped = dcoord;
   at::Tensor coord_wrapped_Tensor =
@@ -208,10 +215,15 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       torch::from_blob(atype_64.data(), {1, nall_real}, int_option).to(device);
   if (ago == 0) {
     nlist_data.copy_from_nlist(lmp_list, nall - nghost);
+    std::cerr << "[DeepPotPT::compute] copied nlist, shuffling" << std::endl;
     nlist_data.shuffle_exclude_empty(fwd_map);
     nlist_data.padding();
+    std::cerr << "[DeepPotPT::compute] nlist shuffled and padded, nloc in nlist="
+              << nlist_data.ilist.size() << std::endl;
     if (do_message_passing) {
       int nswap = lmp_list.nswap;
+      std::cerr << "[DeepPotPT::compute] do_message_passing=true, nswap="
+                << nswap << std::endl;
       torch::Tensor sendproc_tensor =
           torch::from_blob(lmp_list.sendproc, {nswap}, int32_option);
       torch::Tensor recvproc_tensor =
@@ -233,6 +245,8 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       torch::Tensor nswap_tensor = torch::tensor(nswap, int32_option);
       int total_send =
           std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
+      std::cerr << "[DeepPotPT::compute] total_send=" << total_send
+                << std::endl;
       torch::Tensor sendlist_tensor =
           torch::from_blob(lmp_list.sendlist, {total_send}, int32_option);
       comm_dict.insert_or_assign("send_list", sendlist_tensor);
@@ -243,6 +257,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       comm_dict.insert_or_assign("communicator", communicator_tensor);
     }
     if (lmp_list.mapping) {
+      std::cerr << "[DeepPotPT::compute] building mapping tensor" << std::endl;
       std::vector<std::int64_t> mapping(nall_real);
       for (size_t ii = 0; ii < nall_real; ii++) {
         mapping[ii] = lmp_list.mapping[bkw_map[ii]];
@@ -254,6 +269,9 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
   }
   at::Tensor firstneigh = createNlistTensor(nlist_data.jlist);
   firstneigh_tensor = firstneigh.to(torch::kInt64).to(device);
+  std::cerr << "[DeepPotPT::compute] firstneigh_tensor shape: ["
+            << firstneigh_tensor.size(0) << "," << firstneigh_tensor.size(1)
+            << "," << firstneigh_tensor.size(2) << "]" << std::endl;
   bool do_atom_virial_tensor = atomic;
   c10::optional<torch::Tensor> fparam_tensor;
   if (!fparam.empty()) {
@@ -272,6 +290,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
             options)
             .to(device);
   }
+  std::cerr << "[DeepPotPT::compute] calling forward_lower" << std::endl;
   c10::Dict<c10::IValue, c10::IValue> outputs =
       (do_message_passing)
           ? module
@@ -284,6 +303,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
                             firstneigh_tensor, mapping_tensor, fparam_tensor,
                             aparam_tensor, do_atom_virial_tensor)
                 .toGenericDict();
+  std::cerr << "[DeepPotPT::compute] forward_lower done" << std::endl;
   c10::IValue energy_ = outputs.at("energy");
   c10::IValue force_ = outputs.at("extended_force");
   c10::IValue virial_ = outputs.at("virial");
@@ -301,9 +321,13 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
                 cpu_virial_.data_ptr<VALUETYPE>() + cpu_virial_.numel());
 
   // bkw map
+  std::cerr << "[DeepPotPT::compute] bkw mapping force, fwd_map.size()="
+            << fwd_map.size() << " nall_real=" << nall_real
+            << " bkw_map.size()=" << bkw_map.size() << std::endl;
   force.resize(static_cast<size_t>(nframes) * fwd_map.size() * 3);
   select_map<VALUETYPE>(force, dforce, bkw_map, 3, nframes, fwd_map.size(),
                         nall_real);
+  std::cerr << "[DeepPotPT::compute] force mapped successfully" << std::endl;
   if (atomic) {
     c10::IValue atom_virial_ = outputs.at("extended_virial");
     c10::IValue atom_energy_ = outputs.at("atom_energy");
