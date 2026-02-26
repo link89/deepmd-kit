@@ -261,10 +261,13 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
         for (int s = 0; s < nswap; s++) {
           for (int j = 0; j < lmp_list.sendnum[s]; j++) {
             int orig_idx = lmp_list.sendlist[s][j];
-            int real_idx = fwd_map[orig_idx];
-            if (real_idx >= 0) {
-              remapped_sendlist_data.push_back(real_idx);
-              remapped_sendnum_data[s]++;
+            if (orig_idx >= 0 &&
+                static_cast<size_t>(orig_idx) < fwd_map.size()) {
+              int real_idx = fwd_map[orig_idx];
+              if (real_idx >= 0) {
+                remapped_sendlist_data.push_back(real_idx);
+                remapped_sendnum_data[s]++;
+              }
             }
           }
         }
