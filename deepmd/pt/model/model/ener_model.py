@@ -142,6 +142,26 @@ class EnergyModel(DPModelCommon, DPEnergyModel_):
         do_atomic_virial: bool = False,
         comm_dict: dict[str, torch.Tensor] | None = None,
     ) -> dict[str, torch.Tensor]:
+        import sys
+
+        print(
+            f"[forward_lower] extended_atype shape={extended_atype.shape} "
+            f"nlist shape={nlist.shape}",
+            file=sys.stderr,
+        )
+        if mapping is not None:
+            print(
+                f"[forward_lower] mapping shape={mapping.shape} values={mapping.flatten().tolist()}",
+                file=sys.stderr,
+            )
+        else:
+            print("[forward_lower] mapping=None", file=sys.stderr)
+        if comm_dict is not None:
+            print(f"[forward_lower] comm_dict keys={list(comm_dict.keys())}", file=sys.stderr)
+            for k, v in comm_dict.items():
+                print(f"[forward_lower]   comm_dict[{k}] shape={v.shape} values={v.flatten().tolist()}", file=sys.stderr)
+        else:
+            print("[forward_lower] comm_dict=None", file=sys.stderr)
         model_ret = self.forward_common_lower(
             extended_coord,
             extended_atype,
