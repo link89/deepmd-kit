@@ -6,6 +6,7 @@
 #include <torch/csrc/jit/runtime/jit_exception.h>
 
 #include <cstdint>
+#include <numeric>
 
 #include "common.h"
 #include "device.h"
@@ -250,54 +251,58 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       }
 
       torch::Tensor nswap_tensor = torch::tensor(nswap, int32_option);
-      torch::Tensor sendnum_tensor;
-      torch::Tensor sendlist_tensor;
-      if (has_null_atoms) {
-        // When NULL-type atoms exist the LAMMPS sendlist is in original-space.
-        // Remap each entry to real-space using fwd_map, and filter out any
-        // NULL-type atoms (fwd_map[orig_idx] == -1).
-        remapped_sendnum_data.assign(nswap, 0);
-        remapped_sendlist_data.clear();
-        for (int s = 0; s < nswap; s++) {
-          for (int j = 0; j < lmp_list.sendnum[s]; j++) {
-            int orig_idx = lmp_list.sendlist[s][j];
-            if (orig_idx >= 0 &&
-                static_cast<size_t>(orig_idx) < fwd_map.size()) {
-              int real_idx = fwd_map[orig_idx];
-              if (real_idx >= 0) {
-                remapped_sendlist_data.push_back(real_idx);
-                remapped_sendnum_data[s]++;
-              }
-            }
+
+      // NOTE:
+      // - lmp_list.sendlist is int** (one int* per swap), cannot be treated as a flat buffer.
+      // - DeepPotPT filters out virtual atoms (atype == -1) via select_real_atoms_coord,
+      //   generating fwd_map. For message passing, send_list must be remapped into the
+      //   filtered real-atoms index space and indices with fwd_map[idx] == -1 must be dropped.
+
+      // Reserve using the original total_send as an upper bound.
+      const int total_send0 =
+          std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
+
+      mp_sendnum_remap_.assign(static_cast<size_t>(nswap), 0);
+      mp_sendlist_remap_.clear();
+      mp_sendlist_remap_.reserve(static_cast<size_t>(total_send0));
+
+      for (int iswap = 0; iswap < nswap; ++iswap) {
+        const int nsend0 = lmp_list.sendnum[iswap];
+        std::int32_t nsend1 = 0;
+        const int* sl = lmp_list.sendlist[iswap];
+        for (int k = 0; k < nsend0; ++k) {
+          const int idx0 = sl[k];
+          // idx0 is in the original (pre-filter) index space.
+          if (idx0 < 0 || idx0 >= static_cast<int>(fwd_map.size())) {
+            continue;
           }
+          const int idx1 = fwd_map[idx0];
+          if (idx1 < 0) {
+            // virtual atom or otherwise excluded
+            continue;
+          }
+          mp_sendlist_remap_.push_back(static_cast<std::int32_t>(idx1));
+          nsend1 += 1;
         }
-        int new_total_send = static_cast<int>(remapped_sendlist_data.size());
-        std::cerr << "[DeepPotPT::compute] sendlist remapped: original "
-                  << std::accumulate(lmp_list.sendnum,
-                                     lmp_list.sendnum + nswap, 0)
-                  << " -> real " << new_total_send << " entries" << std::endl;
-        sendnum_tensor = torch::from_blob(remapped_sendnum_data.data(),
-                                          {nswap}, int32_option);
-        if (new_total_send > 0) {
-          sendlist_tensor = torch::from_blob(remapped_sendlist_data.data(),
-                                             {new_total_send}, int32_option);
-        } else {
-          sendlist_tensor = torch::empty({0}, int32_option);
-        }
-      } else {
-        int total_send =
-            std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
-        std::cerr << "[DeepPotPT::compute] total_send=" << total_send
-                  << std::endl;
-        sendnum_tensor =
-            torch::from_blob(lmp_list.sendnum, {nswap}, int32_option);
-        sendlist_tensor =
-            torch::from_blob(lmp_list.sendlist, {total_send}, int32_option);
+        mp_sendnum_remap_[static_cast<size_t>(iswap)] = nsend1;
       }
-      comm_dict.insert_or_assign("send_list", sendlist_tensor);
+
+      int new_total_send = static_cast<int>(mp_sendlist_remap_.size());
+      std::cerr << "[DeepPotPT::compute] sendlist remapped: original "
+                << total_send0 << " -> real " << new_total_send
+                << " entries" << std::endl;
+
+      // Create tensors for comm_dict. We use torch::tensor() to copy data,
+      // which is safe with respect to object lifetime.
+      torch::Tensor sendnum_tensor_remap =
+          torch::tensor(mp_sendnum_remap_, int32_option);
+      torch::Tensor sendlist_tensor_remap =
+          torch::tensor(mp_sendlist_remap_, int32_option);
+
+      comm_dict.insert_or_assign("send_list", sendlist_tensor_remap);
       comm_dict.insert_or_assign("send_proc", sendproc_tensor);
       comm_dict.insert_or_assign("recv_proc", recvproc_tensor);
-      comm_dict.insert_or_assign("send_num", sendnum_tensor);
+      comm_dict.insert_or_assign("send_num", sendnum_tensor_remap);
       comm_dict.insert_or_assign("recv_num", recvnum_tensor);
       comm_dict.insert_or_assign("communicator", communicator_tensor);
     }

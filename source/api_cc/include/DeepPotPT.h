@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 #pragma once
 
+#include <cstdint>
 #include <torch/script.h>
 #include <torch/torch.h>
 
@@ -340,11 +341,11 @@ class DeepPotPT : public DeepPotBackend {
   at::Tensor firstneigh_tensor;
   c10::optional<torch::Tensor> mapping_tensor;
   std::vector<std::int64_t> mapping_data;  // persistent storage backing mapping_tensor
-  // Persistent storage for remapped sendlist/sendnum (used when NULL-type atoms
-  // are present so that original-space LAMMPS indices are converted to
-  // real-space before being passed to forward_lower via comm_dict).
-  std::vector<int> remapped_sendnum_data;
-  std::vector<int> remapped_sendlist_data;
+  // Buffers for message passing comm_dict. We keep them as members so that
+  // tensors created via from_blob (if used) never outlive the underlying storage.
+  // Also helps reuse allocations across timesteps.
+  std::vector<std::int32_t> mp_sendlist_remap_;
+  std::vector<std::int32_t> mp_sendnum_remap_;
   torch::Dict<std::string, torch::Tensor> comm_dict;
   bool profiler_enabled{false};
   std::string profiler_file;
