@@ -278,7 +278,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       }
       std::cerr << "[DeepPotPT::compute] building mapping tensor, nall_real="
                 << nall_real << " nloc_real=" << nloc_real << std::endl;
-      for (size_t ii = 0; ii < std::min(nall_real, (size_t)5); ++ii) {
+      for (size_t ii = 0; ii < nall_real; ++ii) {
         std::cerr << "[DeepPotPT::compute] DIAG mapping[" << ii
                   << "]=" << mapping[ii]
                   << " fwd_map[" << ii << "]=" << fwd_map[ii] << std::endl;
