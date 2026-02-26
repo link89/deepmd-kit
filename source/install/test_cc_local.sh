@@ -31,7 +31,9 @@ cmake \
 	-D BUILD_TESTING:BOOL=TRUE \
 	-D LAMMPS_VERSION=stable_22Jul2025_update2 \
 	${CUDA_ARGS} ..
-cmake --build . -j${NPROC}
+cmake --build . -j${NPROC} 2>&1 > cmake-build.log
+tail -n 200 cmake-build.log 
+
 cmake --install .
 if [ "${ENABLE_PADDLE:-TRUE}" == "TRUE" ]; then
 	PADDLE_INFERENCE_DIR=${BUILD_TMP_DIR}/paddle_inference_install_dir
@@ -42,12 +44,16 @@ fi
 if echo "$CXXFLAGS" | grep -q "sanitize=.*address"; then
     export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
 fi
+
 # fix cannot find libdeepmd.so
 export LD_LIBRARY_PATH=$(realpath $INSTALL_PREFIX)/lib:$LD_LIBRARY_PATH
 
 # print more info for debug
 export LD_DEBUG=libs
-env | sort
+env | sort || true
+
+# disable asan for unit test
+# export ASAN_OPTIONS=halt_on_error=0:detect_leaks=0:abort_on_error=0:print_summary=0:report_free_failed=0
 
 # run unit test
 ctest --output-on-failure
