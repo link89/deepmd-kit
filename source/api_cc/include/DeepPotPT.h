@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 #pragma once
 
-#include <cstdint>
 #include <torch/script.h>
 #include <torch/torch.h>
 
@@ -340,12 +339,6 @@ class DeepPotPT : public DeepPotBackend {
   bool gpu_enabled;
   at::Tensor firstneigh_tensor;
   c10::optional<torch::Tensor> mapping_tensor;
-  std::vector<std::int64_t> mapping_data;  // persistent storage backing mapping_tensor
-  // Buffers for message passing comm_dict. We keep them as members so that
-  // tensors created via from_blob (if used) never outlive the underlying storage.
-  // Also helps reuse allocations across timesteps.
-  std::vector<std::int32_t> mp_sendlist_remap_;
-  std::vector<std::int32_t> mp_sendnum_remap_;
   torch::Dict<std::string, torch::Tensor> comm_dict;
   bool profiler_enabled{false};
   std::string profiler_file;

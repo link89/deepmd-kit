@@ -211,9 +211,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
   if (has_null_atoms) {
     std::cerr << "[DeepPotPT::compute] INFO: " << (nall - nall_real)
               << " NULL-type atom(s) detected (nall=" << nall
-              << " nall_real=" << nall_real
-              << "). sendlist will be remapped from original-space to "
-                 "real-space using fwd_map." << std::endl;
+              << " nall_real=" << nall_real << ")." << std::endl;
   }
   int nframes = 1;
   std::vector<VALUETYPE> coord_wrapped = dcoord;
@@ -251,73 +249,42 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       }
 
       torch::Tensor nswap_tensor = torch::tensor(nswap, int32_option);
-
-      // NOTE:
-      // - lmp_list.sendlist is int** (one int* per swap), cannot be treated as a flat buffer.
-      // - DeepPotPT filters out virtual atoms (atype == -1) via select_real_atoms_coord,
-      //   generating fwd_map. For message passing, send_list must be remapped into the
-      //   filtered real-atoms index space and indices with fwd_map[idx] == -1 must be dropped.
-
-      // Reserve using the original total_send as an upper bound.
-      const int total_send0 =
+      torch::Tensor sendnum_tensor =
+          torch::from_blob(lmp_list.sendnum, {nswap}, int32_option);
+      int total_send =
           std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
-
-      mp_sendnum_remap_.assign(static_cast<size_t>(nswap), 0);
-      mp_sendlist_remap_.clear();
-      mp_sendlist_remap_.reserve(static_cast<size_t>(total_send0));
-
-      for (int iswap = 0; iswap < nswap; ++iswap) {
-        const int nsend0 = lmp_list.sendnum[iswap];
-        std::int32_t nsend1 = 0;
-        const int* sl = lmp_list.sendlist[iswap];
-        for (int k = 0; k < nsend0; ++k) {
-          const int idx0 = sl[k];
-          // idx0 is in the original (pre-filter) index space.
-          if (idx0 < 0 || idx0 >= static_cast<int>(fwd_map.size())) {
-            continue;
-          }
-          const int idx1 = fwd_map[idx0];
-          if (idx1 < 0) {
-            // virtual atom or otherwise excluded
-            continue;
-          }
-          mp_sendlist_remap_.push_back(static_cast<std::int32_t>(idx1));
-          nsend1 += 1;
+      std::cerr << "[DeepPotPT::compute] total_send=" << total_send
+                << std::endl;
+      for (int s = 0; s < nswap; ++s) {
+        if (lmp_list.sendnum[s] > 0) {
+          std::cerr << "[DeepPotPT::compute] DIAG sendlist[" << s << "][0]="
+                    << lmp_list.sendlist[s][0]
+                    << " (nall_real=" << nall_real << ")" << std::endl;
         }
-        mp_sendnum_remap_[static_cast<size_t>(iswap)] = nsend1;
       }
-
-      int new_total_send = static_cast<int>(mp_sendlist_remap_.size());
-      std::cerr << "[DeepPotPT::compute] sendlist remapped: original "
-                << total_send0 << " -> real " << new_total_send
-                << " entries" << std::endl;
-
-      // Create tensors for comm_dict. We use torch::tensor() to copy data,
-      // which is safe with respect to object lifetime.
-      torch::Tensor sendnum_tensor_remap =
-          torch::tensor(mp_sendnum_remap_, int32_option);
-      torch::Tensor sendlist_tensor_remap =
-          torch::tensor(mp_sendlist_remap_, int32_option);
-
-      comm_dict.insert_or_assign("send_list", sendlist_tensor_remap);
+      torch::Tensor sendlist_tensor =
+          torch::from_blob(lmp_list.sendlist, {total_send}, int32_option);
+      comm_dict.insert_or_assign("send_list", sendlist_tensor);
       comm_dict.insert_or_assign("send_proc", sendproc_tensor);
       comm_dict.insert_or_assign("recv_proc", recvproc_tensor);
-      comm_dict.insert_or_assign("send_num", sendnum_tensor_remap);
+      comm_dict.insert_or_assign("send_num", sendnum_tensor);
       comm_dict.insert_or_assign("recv_num", recvnum_tensor);
       comm_dict.insert_or_assign("communicator", communicator_tensor);
     }
     if (lmp_list.mapping) {
-      // lmp_list.mapping[j] gives the original-space local index of the owner
-      // of original atom j. We need real-space indices, so apply fwd_map to
-      // convert: real_atom_ii → original owner idx → real owner idx.
-      mapping_data.resize(nall_real);
+      std::vector<std::int64_t> mapping(nall_real);
       for (size_t ii = 0; ii < nall_real; ii++) {
-        mapping_data[ii] = fwd_map[lmp_list.mapping[bkw_map[ii]]];
+        mapping[ii] = lmp_list.mapping[fwd_map[ii]];
       }
       std::cerr << "[DeepPotPT::compute] building mapping tensor, nall_real="
                 << nall_real << " nloc_real=" << nloc_real << std::endl;
+      for (size_t ii = 0; ii < std::min(nall_real, (size_t)5); ++ii) {
+        std::cerr << "[DeepPotPT::compute] DIAG mapping[" << ii
+                  << "]=" << mapping[ii]
+                  << " fwd_map[" << ii << "]=" << fwd_map[ii] << std::endl;
+      }
       mapping_tensor =
-          torch::from_blob(mapping_data.data(), {1, nall_real}, int_option)
+          torch::from_blob(mapping.data(), {1, nall_real}, int_option)
               .to(device);
     }
   }
