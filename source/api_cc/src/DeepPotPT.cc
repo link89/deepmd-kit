@@ -257,11 +257,15 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       comm_dict.insert_or_assign("communicator", communicator_tensor);
     }
     if (lmp_list.mapping) {
-      std::cerr << "[DeepPotPT::compute] building mapping tensor" << std::endl;
+      // lmp_list.mapping[j] gives the original-space local index of the owner
+      // of original atom j. We need real-space indices, so apply fwd_map to
+      // convert: real_atom_ii → original owner idx → real owner idx.
       mapping_data.resize(nall_real);
       for (size_t ii = 0; ii < nall_real; ii++) {
-        mapping_data[ii] = lmp_list.mapping[bkw_map[ii]];
+        mapping_data[ii] = fwd_map[lmp_list.mapping[bkw_map[ii]]];
       }
+      std::cerr << "[DeepPotPT::compute] building mapping tensor, nall_real="
+                << nall_real << " nloc_real=" << nloc_real << std::endl;
       mapping_tensor =
           torch::from_blob(mapping_data.data(), {1, nall_real}, int_option)
               .to(device);
