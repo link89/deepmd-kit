@@ -258,12 +258,12 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
     }
     if (lmp_list.mapping) {
       std::cerr << "[DeepPotPT::compute] building mapping tensor" << std::endl;
-      std::vector<std::int64_t> mapping(nall_real);
+      mapping_data.resize(nall_real);
       for (size_t ii = 0; ii < nall_real; ii++) {
-        mapping[ii] = lmp_list.mapping[bkw_map[ii]];
+        mapping_data[ii] = lmp_list.mapping[bkw_map[ii]];
       }
       mapping_tensor =
-          torch::from_blob(mapping.data(), {1, nall_real}, int_option)
+          torch::from_blob(mapping_data.data(), {1, nall_real}, int_option)
               .to(device);
     }
   }

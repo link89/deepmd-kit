@@ -339,6 +339,7 @@ class DeepPotPT : public DeepPotBackend {
   bool gpu_enabled;
   at::Tensor firstneigh_tensor;
   c10::optional<torch::Tensor> mapping_tensor;
+  std::vector<std::int64_t> mapping_data;  // persistent storage backing mapping_tensor
   torch::Dict<std::string, torch::Tensor> comm_dict;
   bool profiler_enabled{false};
   std::string profiler_file;
