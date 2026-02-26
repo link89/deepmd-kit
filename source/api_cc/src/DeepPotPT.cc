@@ -213,6 +213,19 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
               << " NULL-type atom(s) detected (nall=" << nall
               << " nall_real=" << nall_real << ")." << std::endl;
   }
+  // Print all atom indices: real atoms (fwd_map >= 0) and virtual (fwd_map == -1)
+  std::cerr << "[DeepPotPT::compute] fwd_map (size=" << fwd_map.size() << "):"
+            << std::endl;
+  for (size_t ii = 0; ii < fwd_map.size(); ++ii) {
+    std::cerr << "  orig[" << ii << "] atype=" << atype[ii]
+              << " fwd_map=" << fwd_map[ii]
+              << (fwd_map[ii] < 0 ? " (VIRTUAL)" : " (real)") << std::endl;
+  }
+  std::cerr << "[DeepPotPT::compute] bkw_map (size=" << bkw_map.size() << "):"
+            << std::endl;
+  for (size_t ii = 0; ii < bkw_map.size(); ++ii) {
+    std::cerr << "  real[" << ii << "] -> orig=" << bkw_map[ii] << std::endl;
+  }
   int nframes = 1;
   std::vector<VALUETYPE> coord_wrapped = dcoord;
   at::Tensor coord_wrapped_Tensor =
@@ -255,13 +268,6 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
           std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
       std::cerr << "[DeepPotPT::compute] total_send=" << total_send
                 << std::endl;
-      for (int s = 0; s < nswap; ++s) {
-        if (lmp_list.sendnum[s] > 0) {
-          std::cerr << "[DeepPotPT::compute] DIAG sendlist[" << s << "][0]="
-                    << lmp_list.sendlist[s][0]
-                    << " (nall_real=" << nall_real << ")" << std::endl;
-        }
-      }
       torch::Tensor sendlist_tensor =
           torch::from_blob(lmp_list.sendlist, {total_send}, int32_option);
       comm_dict.insert_or_assign("send_list", sendlist_tensor);
@@ -270,6 +276,26 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       comm_dict.insert_or_assign("send_num", sendnum_tensor);
       comm_dict.insert_or_assign("recv_num", recvnum_tensor);
       comm_dict.insert_or_assign("communicator", communicator_tensor);
+      // Print full comm_dict contents for debugging
+      std::cerr << "[DeepPotPT::compute] DIAG comm_dict contents:" << std::endl;
+      std::cerr << "  send_proc=" << sendproc_tensor << std::endl;
+      std::cerr << "  recv_proc=" << recvproc_tensor << std::endl;
+      std::cerr << "  send_num=" << sendnum_tensor << std::endl;
+      std::cerr << "  recv_num=" << recvnum_tensor << std::endl;
+      std::cerr << "  firstrecv=" << firstrecv_tensor << std::endl;
+      std::cerr << "  send_list (flat blob, size=" << total_send << "):" << std::endl;
+      for (int s = 0; s < nswap; ++s) {
+        std::cerr << "    swap[" << s << "] sendnum=" << lmp_list.sendnum[s]
+                  << " recvnum=" << lmp_list.recvnum[s]
+                  << " sendproc=" << lmp_list.sendproc[s]
+                  << " recvproc=" << lmp_list.recvproc[s] << std::endl;
+        for (int k = 0; k < lmp_list.sendnum[s]; ++k) {
+          std::cerr << "      sendlist[" << s << "][" << k
+                    << "]=" << lmp_list.sendlist[s][k]
+                    << (lmp_list.sendlist[s][k] < nall_real ? " (valid)" : " (OOB!)")
+                    << std::endl;
+        }
+      }
     }
     if (lmp_list.mapping) {
       std::vector<std::int64_t> mapping(nall_real);
