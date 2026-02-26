@@ -337,11 +337,11 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
             options)
             .to(device);
   }
-  std::cerr << "[DeepPotPT::compute] mapping_tensor defined="
-            << mapping_tensor.defined();
-  if (mapping_tensor.defined()) {
-    std::cerr << " shape=" << mapping_tensor.sizes()
-              << " values=" << mapping_tensor.flatten() << std::endl;
+  std::cerr << "[DeepPotPT::compute] mapping_tensor has_value="
+            << mapping_tensor.has_value();
+  if (mapping_tensor.has_value()) {
+    std::cerr << " shape=" << mapping_tensor.value().sizes()
+              << " values=" << mapping_tensor.value().flatten() << std::endl;
   } else {
     std::cerr << std::endl;
   }
