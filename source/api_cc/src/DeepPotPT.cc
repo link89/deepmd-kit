@@ -202,9 +202,23 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
                           bkw_map, nall_real, nloc_real, coord, atype, aparam,
                           nghost, ntypes, 1, daparam, nall, aparam_nall);
   int nloc = nall_real - nghost_real;
+  // Detect whether any NULL-type atoms were filtered out.
+  // When nall_real < nall the sendlist (in original-space) may contain atom
+  // indices >= nall_real, which would cause OOB inside forward_lower. Message
+  // passing is therefore skipped in this case so the model falls back to using
+  // the ghost atoms that are already present in the coordinate tensor.
+  bool has_null_atoms = (nall_real < nall);
   std::cerr << "[DeepPotPT::compute] nall_real=" << nall_real
             << " nloc_real=" << nloc_real << " nghost_real=" << nghost_real
-            << std::endl;
+            << " has_null_atoms=" << has_null_atoms << std::endl;
+  if (has_null_atoms) {
+    std::cerr << "[DeepPotPT::compute] WARNING: " << (nall - nall_real)
+              << " NULL-type atom(s) detected (nall=" << nall
+              << " nall_real=" << nall_real
+              << "). Message passing comm_dict will be skipped because the "
+                 "LAMMPS sendlist is in original-space and may contain "
+                 "indices >= nall_real." << std::endl;
+  }
   int nframes = 1;
   std::vector<VALUETYPE> coord_wrapped = dcoord;
   at::Tensor coord_wrapped_Tensor =
@@ -220,7 +234,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
     nlist_data.padding();
     std::cerr << "[DeepPotPT::compute] nlist shuffled and padded, nloc in nlist="
               << nlist_data.ilist.size() << std::endl;
-    if (do_message_passing) {
+    if (do_message_passing && !has_null_atoms) {
       int nswap = lmp_list.nswap;
       std::cerr << "[DeepPotPT::compute] do_message_passing=true, nswap="
                 << nswap << std::endl;
@@ -255,6 +269,24 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       comm_dict.insert_or_assign("send_num", sendnum_tensor);
       comm_dict.insert_or_assign("recv_num", recvnum_tensor);
       comm_dict.insert_or_assign("communicator", communicator_tensor);
+    } else if (do_message_passing && has_null_atoms) {
+      int nswap = lmp_list.nswap;
+      int total_send =
+          std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
+      // Log sendlist diagnostics: show first entry of each swap to expose the
+      // index-space mismatch (original vs real).
+      std::cerr << "[DeepPotPT::compute] DIAG: sendlist nswap=" << nswap
+                << " total_send=" << total_send
+                << " (skipped, see WARNING above)" << std::endl;
+      for (int s = 0; s < nswap && s < 4; ++s) {
+        std::cerr << "[DeepPotPT::compute] DIAG: sendnum[" << s
+                  << "]=" << lmp_list.sendnum[s];
+        if (lmp_list.sendnum[s] > 0 && lmp_list.sendlist != nullptr) {
+          std::cerr << " sendlist[" << s << "][0]=" << lmp_list.sendlist[s][0]
+                    << " (valid_range=[0," << (nall_real - 1) << "])";
+        }
+        std::cerr << std::endl;
+      }
     }
     if (lmp_list.mapping) {
       // lmp_list.mapping[j] gives the original-space local index of the owner
@@ -294,9 +326,11 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
             options)
             .to(device);
   }
-  std::cerr << "[DeepPotPT::compute] calling forward_lower" << std::endl;
+  std::cerr << "[DeepPotPT::compute] calling forward_lower"
+            << " use_comm_dict=" << (do_message_passing && !has_null_atoms)
+            << std::endl;
   c10::Dict<c10::IValue, c10::IValue> outputs =
-      (do_message_passing)
+      (do_message_passing && !has_null_atoms)
           ? module
                 .run_method("forward_lower", coord_wrapped_Tensor, atype_Tensor,
                             firstneigh_tensor, mapping_tensor, fparam_tensor,
