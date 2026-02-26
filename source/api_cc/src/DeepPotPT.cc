@@ -203,21 +203,16 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
                           nghost, ntypes, 1, daparam, nall, aparam_nall);
   int nloc = nall_real - nghost_real;
   // Detect whether any NULL-type atoms were filtered out.
-  // When nall_real < nall the sendlist (in original-space) may contain atom
-  // indices >= nall_real, which would cause OOB inside forward_lower. Message
-  // passing is therefore skipped in this case so the model falls back to using
-  // the ghost atoms that are already present in the coordinate tensor.
   bool has_null_atoms = (nall_real < nall);
   std::cerr << "[DeepPotPT::compute] nall_real=" << nall_real
             << " nloc_real=" << nloc_real << " nghost_real=" << nghost_real
             << " has_null_atoms=" << has_null_atoms << std::endl;
   if (has_null_atoms) {
-    std::cerr << "[DeepPotPT::compute] WARNING: " << (nall - nall_real)
+    std::cerr << "[DeepPotPT::compute] INFO: " << (nall - nall_real)
               << " NULL-type atom(s) detected (nall=" << nall
               << " nall_real=" << nall_real
-              << "). Message passing comm_dict will be skipped because the "
-                 "LAMMPS sendlist is in original-space and may contain "
-                 "indices >= nall_real." << std::endl;
+              << "). sendlist will be remapped from original-space to "
+                 "real-space using fwd_map." << std::endl;
   }
   int nframes = 1;
   std::vector<VALUETYPE> coord_wrapped = dcoord;
@@ -234,7 +229,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
     nlist_data.padding();
     std::cerr << "[DeepPotPT::compute] nlist shuffled and padded, nloc in nlist="
               << nlist_data.ilist.size() << std::endl;
-    if (do_message_passing && !has_null_atoms) {
+    if (do_message_passing) {
       int nswap = lmp_list.nswap;
       std::cerr << "[DeepPotPT::compute] do_message_passing=true, nswap="
                 << nswap << std::endl;
@@ -246,8 +241,6 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
           torch::from_blob(lmp_list.firstrecv, {nswap}, int32_option);
       torch::Tensor recvnum_tensor =
           torch::from_blob(lmp_list.recvnum, {nswap}, int32_option);
-      torch::Tensor sendnum_tensor =
-          torch::from_blob(lmp_list.sendnum, {nswap}, int32_option);
       torch::Tensor communicator_tensor;
       if (lmp_list.world == 0) {
         communicator_tensor = torch::empty({1}, torch::kInt64);
@@ -257,36 +250,53 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       }
 
       torch::Tensor nswap_tensor = torch::tensor(nswap, int32_option);
-      int total_send =
-          std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
-      std::cerr << "[DeepPotPT::compute] total_send=" << total_send
-                << std::endl;
-      torch::Tensor sendlist_tensor =
-          torch::from_blob(lmp_list.sendlist, {total_send}, int32_option);
+      torch::Tensor sendnum_tensor;
+      torch::Tensor sendlist_tensor;
+      if (has_null_atoms) {
+        // When NULL-type atoms exist the LAMMPS sendlist is in original-space.
+        // Remap each entry to real-space using fwd_map, and filter out any
+        // NULL-type atoms (fwd_map[orig_idx] == -1).
+        remapped_sendnum_data.assign(nswap, 0);
+        remapped_sendlist_data.clear();
+        for (int s = 0; s < nswap; s++) {
+          for (int j = 0; j < lmp_list.sendnum[s]; j++) {
+            int orig_idx = lmp_list.sendlist[s][j];
+            int real_idx = fwd_map[orig_idx];
+            if (real_idx >= 0) {
+              remapped_sendlist_data.push_back(real_idx);
+              remapped_sendnum_data[s]++;
+            }
+          }
+        }
+        int new_total_send = static_cast<int>(remapped_sendlist_data.size());
+        std::cerr << "[DeepPotPT::compute] sendlist remapped: original "
+                  << std::accumulate(lmp_list.sendnum,
+                                     lmp_list.sendnum + nswap, 0)
+                  << " -> real " << new_total_send << " entries" << std::endl;
+        sendnum_tensor = torch::from_blob(remapped_sendnum_data.data(),
+                                          {nswap}, int32_option);
+        if (new_total_send > 0) {
+          sendlist_tensor = torch::from_blob(remapped_sendlist_data.data(),
+                                             {new_total_send}, int32_option);
+        } else {
+          sendlist_tensor = torch::empty({0}, int32_option);
+        }
+      } else {
+        int total_send =
+            std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
+        std::cerr << "[DeepPotPT::compute] total_send=" << total_send
+                  << std::endl;
+        sendnum_tensor =
+            torch::from_blob(lmp_list.sendnum, {nswap}, int32_option);
+        sendlist_tensor =
+            torch::from_blob(lmp_list.sendlist, {total_send}, int32_option);
+      }
       comm_dict.insert_or_assign("send_list", sendlist_tensor);
       comm_dict.insert_or_assign("send_proc", sendproc_tensor);
       comm_dict.insert_or_assign("recv_proc", recvproc_tensor);
       comm_dict.insert_or_assign("send_num", sendnum_tensor);
       comm_dict.insert_or_assign("recv_num", recvnum_tensor);
       comm_dict.insert_or_assign("communicator", communicator_tensor);
-    } else if (do_message_passing && has_null_atoms) {
-      int nswap = lmp_list.nswap;
-      int total_send =
-          std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
-      // Log sendlist diagnostics: show first entry of each swap to expose the
-      // index-space mismatch (original vs real).
-      std::cerr << "[DeepPotPT::compute] DIAG: sendlist nswap=" << nswap
-                << " total_send=" << total_send
-                << " (skipped, see WARNING above)" << std::endl;
-      for (int s = 0; s < nswap && s < 4; ++s) {
-        std::cerr << "[DeepPotPT::compute] DIAG: sendnum[" << s
-                  << "]=" << lmp_list.sendnum[s];
-        if (lmp_list.sendnum[s] > 0 && lmp_list.sendlist != nullptr) {
-          std::cerr << " sendlist[" << s << "][0]=" << lmp_list.sendlist[s][0]
-                    << " (valid_range=[0," << (nall_real - 1) << "])";
-        }
-        std::cerr << std::endl;
-      }
     }
     if (lmp_list.mapping) {
       // lmp_list.mapping[j] gives the original-space local index of the owner
@@ -327,10 +337,9 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
             .to(device);
   }
   std::cerr << "[DeepPotPT::compute] calling forward_lower"
-            << " use_comm_dict=" << (do_message_passing && !has_null_atoms)
-            << std::endl;
+            << " use_comm_dict=" << do_message_passing << std::endl;
   c10::Dict<c10::IValue, c10::IValue> outputs =
-      (do_message_passing && !has_null_atoms)
+      (do_message_passing)
           ? module
                 .run_method("forward_lower", coord_wrapped_Tensor, atype_Tensor,
                             firstneigh_tensor, mapping_tensor, fparam_tensor,

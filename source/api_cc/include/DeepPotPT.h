@@ -340,6 +340,11 @@ class DeepPotPT : public DeepPotBackend {
   at::Tensor firstneigh_tensor;
   c10::optional<torch::Tensor> mapping_tensor;
   std::vector<std::int64_t> mapping_data;  // persistent storage backing mapping_tensor
+  // Persistent storage for remapped sendlist/sendnum (used when NULL-type atoms
+  // are present so that original-space LAMMPS indices are converted to
+  // real-space before being passed to forward_lower via comm_dict).
+  std::vector<int> remapped_sendnum_data;
+  std::vector<int> remapped_sendlist_data;
   torch::Dict<std::string, torch::Tensor> comm_dict;
   bool profiler_enabled{false};
   std::string profiler_file;
