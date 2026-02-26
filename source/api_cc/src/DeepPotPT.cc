@@ -337,6 +337,14 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
             options)
             .to(device);
   }
+  std::cerr << "[DeepPotPT::compute] mapping_tensor defined="
+            << mapping_tensor.defined();
+  if (mapping_tensor.defined()) {
+    std::cerr << " shape=" << mapping_tensor.sizes()
+              << " values=" << mapping_tensor.flatten() << std::endl;
+  } else {
+    std::cerr << std::endl;
+  }
   std::cerr << "[DeepPotPT::compute] calling forward_lower"
             << " use_comm_dict=" << do_message_passing << std::endl;
   c10::Dict<c10::IValue, c10::IValue> outputs;
