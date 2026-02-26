@@ -42,5 +42,8 @@ fi
 if echo "$CXXFLAGS" | grep -q "sanitize=.*address"; then
     export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
 fi
+# print env for debug
+env
 
+# run unit test
 ctest --output-on-failure
