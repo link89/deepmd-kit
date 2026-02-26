@@ -339,18 +339,30 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
   }
   std::cerr << "[DeepPotPT::compute] calling forward_lower"
             << " use_comm_dict=" << do_message_passing << std::endl;
-  c10::Dict<c10::IValue, c10::IValue> outputs =
-      (do_message_passing)
-          ? module
-                .run_method("forward_lower", coord_wrapped_Tensor, atype_Tensor,
-                            firstneigh_tensor, mapping_tensor, fparam_tensor,
-                            aparam_tensor, do_atom_virial_tensor, comm_dict)
-                .toGenericDict()
-          : module
-                .run_method("forward_lower", coord_wrapped_Tensor, atype_Tensor,
-                            firstneigh_tensor, mapping_tensor, fparam_tensor,
-                            aparam_tensor, do_atom_virial_tensor)
-                .toGenericDict();
+  c10::Dict<c10::IValue, c10::IValue> outputs;
+  try {
+    outputs = (do_message_passing)
+                  ? module
+                        .run_method("forward_lower", coord_wrapped_Tensor,
+                                    atype_Tensor, firstneigh_tensor,
+                                    mapping_tensor, fparam_tensor, aparam_tensor,
+                                    do_atom_virial_tensor, comm_dict)
+                        .toGenericDict()
+                  : module
+                        .run_method("forward_lower", coord_wrapped_Tensor,
+                                    atype_Tensor, firstneigh_tensor,
+                                    mapping_tensor, fparam_tensor, aparam_tensor,
+                                    do_atom_virial_tensor)
+                        .toGenericDict();
+  } catch (const c10::Error& e) {
+    std::cerr << "[DeepPotPT::compute] EXCEPTION in forward_lower (c10::Error): "
+              << e.what() << std::endl;
+    throw;
+  } catch (const std::exception& e) {
+    std::cerr << "[DeepPotPT::compute] EXCEPTION in forward_lower (std::exception): "
+              << e.what() << std::endl;
+    throw;
+  }
   std::cerr << "[DeepPotPT::compute] forward_lower done" << std::endl;
   c10::IValue energy_ = outputs.at("energy");
   c10::IValue force_ = outputs.at("extended_force");
