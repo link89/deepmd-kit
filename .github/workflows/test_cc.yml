@@ -34,6 +34,11 @@ jobs:
             enable_tensorflow: false
             enable_pytorch: false
             enable_paddle: true
+          - check_memleak: false
+            use_asan: true
+            enable_tensorflow: true
+            enable_pytorch: true
+            enable_paddle: false
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -52,7 +57,7 @@ jobs:
       # https://github.com/actions/runner-images/issues/9491
       - name: Fix kernel mmap rnd bits
         run: sudo sysctl vm.mmap_rnd_bits=28
-        if: ${{ matrix.check_memleak }}
+        if: ${{ matrix.check_memleak || matrix.use_asan }}
       - run: |
           source/install/test_cc_local.sh
         env:
@@ -60,7 +65,7 @@ jobs:
           TF_INTRA_OP_PARALLELISM_THREADS: 1
           TF_INTER_OP_PARALLELISM_THREADS: 1
           CMAKE_GENERATOR: Ninja
-          CXXFLAGS: ${{ matrix.check_memleak && '-fsanitize=leak' || '' }}
+          CXXFLAGS: ${{ matrix.check_memleak && '-fsanitize=leak' || (matrix.use_asan && '-fsanitize=address -fno-omit-frame-pointer' || '') }}
           LSAN_OPTIONS: suppressions=${{ github.workspace }}/.github/workflows/suppr.txt
           ENABLE_TENSORFLOW: ${{ matrix.enable_tensorflow && 'TRUE' || 'FALSE' }}
           ENABLE_PYTORCH: ${{ matrix.enable_pytorch && 'TRUE' || 'FALSE' }}
@@ -73,6 +78,10 @@ jobs:
         if: matrix.enable_paddle
       - run: |
           export LD_LIBRARY_PATH=${{ github.workspace }}/dp_test/lib:$LD_LIBRARY_PATH
+          if [[ "${{ matrix.use_asan }}" == "true" ]]; then
+            export LD_PRELOAD=$(gcc -print-file-name=libasan.so)
+            export ASAN_OPTIONS=detect_leaks=0
+          fi
           pytest --cov=deepmd source/lmp/tests
         env:
           OMP_NUM_THREADS: 1
@@ -87,6 +96,10 @@ jobs:
       # test ipi
       - run: |
           export PATH=${{ github.workspace }}/dp_test/bin:$PATH
+          if [[ "${{ matrix.use_asan }}" == "true" ]]; then
+            export LD_PRELOAD=$(gcc -print-file-name=libasan.so)
+            export ASAN_OPTIONS=detect_leaks=0
+          fi
           pytest --cov=deepmd source/ipi/tests
         env:
           OMP_NUM_THREADS: 1
