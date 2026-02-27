@@ -49,12 +49,12 @@ torch::Tensor createNlistTensor(const std::vector<std::vector<int>>& data) {
   return flat_tensor.view({1, nloc, nnei});
 }
 
-torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
+void DeepPotPT::update_comm_dict(
     const InputNlist& lmp_list,
     const std::vector<int>& fwd_map,
     int nall_real) {
   int nswap = lmp_list.nswap;
-  std::cerr << "[make_comm_dict] nswap=" << nswap
+  std::cerr << "[update_comm_dict] nswap=" << nswap
             << " nall_real=" << nall_real << std::endl;
 
   auto int32_option =
@@ -71,7 +71,7 @@ torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
     for (int k = 0; k < orig_sendnum; ++k) {
       int orig_idx = lmp_list.sendlist[s][k];
       int real_idx = fwd_map[orig_idx];
-      std::cerr << "[make_comm_dict] swap[" << s << "] k=" << k
+      std::cerr << "[update_comm_dict] swap[" << s << "] k=" << k
                 << " orig_idx=" << orig_idx << " real_idx=" << real_idx
                 << (real_idx >= 0 ? " (kept)" : " (skipped, virtual)")
                 << std::endl;
@@ -81,7 +81,7 @@ torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
       }
     }
     new_sendnum[s] = send_count;
-    std::cerr << "[make_comm_dict] swap[" << s
+    std::cerr << "[update_comm_dict] swap[" << s
               << "] sendnum: " << orig_sendnum << " -> " << send_count << std::endl;
 
     int firstrecv = lmp_list.firstrecv[s];
@@ -90,7 +90,7 @@ torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
     for (int k = 0; k < orig_recvnum; ++k) {
       int orig_idx = firstrecv + k;
       int real_idx = fwd_map[orig_idx];
-      std::cerr << "[make_comm_dict] swap[" << s << "] recv k=" << k
+      std::cerr << "[update_comm_dict] swap[" << s << "] recv k=" << k
                 << " orig_idx=" << orig_idx << " real_idx=" << real_idx
                 << (real_idx >= 0 ? " (kept)" : " (skipped, virtual)")
                 << std::endl;
@@ -99,7 +99,7 @@ torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
       }
     }
     new_recvsum[s] = recv_count;
-    std::cerr << "[make_comm_dict] swap[" << s
+    std::cerr << "[update_comm_dict] swap[" << s
               << "] recvnum: " << orig_recvnum << " -> " << recv_count
               << " (firstrecv=" << firstrecv << ")" << std::endl;
   }
@@ -125,19 +125,18 @@ torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
             .clone();
   }
 
-  std::cerr << "[make_comm_dict] result:"
+  std::cerr << "[update_comm_dict] result:"
             << " send_num=" << sendnum_tensor
             << " send_list=" << sendlist_tensor
             << " recv_num=" << recvnum_tensor << std::endl;
 
-  torch::Dict<std::string, torch::Tensor> dict;
-  dict.insert("send_list", sendlist_tensor);
-  dict.insert("send_proc", sendproc_tensor);
-  dict.insert("recv_proc", recvproc_tensor);
-  dict.insert("send_num", sendnum_tensor);
-  dict.insert("recv_num", recvnum_tensor);
-  dict.insert("communicator", communicator_tensor);
-  return dict;
+  comm_dict = torch::Dict<std::string, torch::Tensor>();
+  comm_dict.insert("send_list", sendlist_tensor);
+  comm_dict.insert("send_proc", sendproc_tensor);
+  comm_dict.insert("recv_proc", recvproc_tensor);
+  comm_dict.insert("send_num", sendnum_tensor);
+  comm_dict.insert("recv_num", recvnum_tensor);
+  comm_dict.insert("communicator", communicator_tensor);
 }
 
 DeepPotPT::DeepPotPT() : inited(false) {}
@@ -351,7 +350,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
                     << std::endl;
         }
       }
-      comm_dict = make_comm_dict(lmp_list, fwd_map, nall_real);
+      update_comm_dict(lmp_list, fwd_map, nall_real);
     }
     if (lmp_list.mapping) {
       std::vector<std::int64_t> mapping(nall_real);

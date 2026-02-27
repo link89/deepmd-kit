@@ -349,16 +349,15 @@ class DeepPotPT : public DeepPotBackend {
    */
   void translate_error(std::function<void()> f);
   /**
-   * @brief Build a comm_dict for message passing, remapping sendlist indices
-   * from original LAMMPS atom space to real-atom space using fwd_map and
-   * skipping virtual (NULL-type) atoms.
+   * @brief Update member comm_dict for message passing, remapping sendlist
+   * indices from original LAMMPS atom space to real-atom space using fwd_map
+   * and skipping virtual (NULL-type) atoms.
    * @param[in] lmp_list The LAMMPS neighbor list containing communication info.
    * @param[in] fwd_map Map from original atom index to real-atom index (-1 for
    * virtual atoms).
    * @param[in] nall_real Total number of real atoms (local + ghost).
-   * @return A comm_dict suitable for passing to forward_lower.
    */
-  torch::Dict<std::string, torch::Tensor> make_comm_dict(
+  void update_comm_dict(
       const InputNlist& lmp_list,
       const std::vector<int>& fwd_map,
       int nall_real);
