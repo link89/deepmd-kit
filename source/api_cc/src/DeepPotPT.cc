@@ -116,13 +116,13 @@ void DeepPotPT::update_comm_dict_with_virtual_atoms(
     new_recvnum[s] = recv_count;
   }
 
-  do_update_comm_dict(lmp_list, new_sendlist, new_sendnum, new_recvnum);
+  update_comm_dict(lmp_list, new_sendlist, new_sendnum, new_recvnum);
 }
 
-void DeepPotPT::do_update_comm_dict(const InputNlist& lmp_list,
-                                    int** sendlist,
-                                    int* sendnum,
-                                    int* recvnum) {
+void DeepPotPT::update_comm_dict(const InputNlist& lmp_list,
+                                 int** sendlist,
+                                 int* sendnum,
+                                 int* recvnum) {
   int nswap = lmp_list.nswap;
   auto int32_option =
       torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
@@ -334,7 +334,7 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       if (has_null_atoms) {
         update_comm_dict_with_virtual_atoms(lmp_list, fwd_map);
       } else {
-        do_update_comm_dict(lmp_list, lmp_list.sendlist, lmp_list.sendnum,
+        update_comm_dict(lmp_list, lmp_list.sendlist, lmp_list.sendnum,
                             lmp_list.recvnum);
       }
     }

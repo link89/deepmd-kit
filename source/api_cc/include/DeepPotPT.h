@@ -371,10 +371,10 @@ class DeepPotPT : public DeepPotBackend {
    * @param[in] sendnum Number of send atoms per swap.
    * @param[in] recvnum Number of recv atoms per swap.
    */
-  void do_update_comm_dict(const InputNlist& lmp_list,
-                           int** sendlist,
-                           int* sendnum,
-                           int* recvnum);
+  void update_comm_dict(const InputNlist& lmp_list,
+                        int** sendlist,
+                        int* sendnum,
+                        int* recvnum);
 };
 
 }  // namespace deepmd
