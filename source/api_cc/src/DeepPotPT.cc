@@ -5,6 +5,7 @@
 #include <torch/csrc/autograd/profiler.h>
 #include <torch/csrc/jit/runtime/jit_exception.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <numeric>
 
@@ -49,44 +50,9 @@ torch::Tensor createNlistTensor(const std::vector<std::vector<int>>& data) {
   return flat_tensor.view({1, nloc, nnei});
 }
 
-void DeepPotPT::update_comm_dict(const InputNlist& lmp_list) {
-  int nswap = lmp_list.nswap;
-  auto int32_option =
-      torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
-  auto int64_option =
-      torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt64);
-  // use 64-bit for int* as sizeof(int*) is supposed to be 8 bytes
-  torch::Tensor sendlist_tensor = torch::from_blob(
-      static_cast<void*>(lmp_list.sendlist), {nswap}, int64_option);
-  torch::Tensor sendnum_tensor =
-      torch::from_blob(lmp_list.sendnum, {nswap}, int32_option);
-  torch::Tensor recvnum_tensor =
-      torch::from_blob(lmp_list.recvnum, {nswap}, int32_option);
-  torch::Tensor sendproc_tensor =
-      torch::from_blob(lmp_list.sendproc, {nswap}, int32_option);
-  torch::Tensor recvproc_tensor =
-      torch::from_blob(lmp_list.recvproc, {nswap}, int32_option);
-  torch::Tensor communicator_tensor;
-  static std::int64_t null_communicator = 0;
-  if (lmp_list.world == nullptr) {
-    communicator_tensor =
-        torch::from_blob(&null_communicator, {1}, torch::kInt64);
-  } else {
-    communicator_tensor =
-        torch::from_blob(const_cast<void*>(lmp_list.world), {1}, torch::kInt64);
-  }
-  comm_dict.insert_or_assign("send_list", sendlist_tensor);
-  comm_dict.insert_or_assign("send_proc", sendproc_tensor);
-  comm_dict.insert_or_assign("recv_proc", recvproc_tensor);
-  comm_dict.insert_or_assign("send_num", sendnum_tensor);
-  comm_dict.insert_or_assign("recv_num", recvnum_tensor);
-  comm_dict.insert_or_assign("communicator", communicator_tensor);
-}
-
 void DeepPotPT::update_comm_dict_with_virtual_atoms(
     const InputNlist& lmp_list,
-    const std::vector<int>& fwd_map,
-    int nall_real) {
+  const std::vector<int>& fwd_map) {
   int nswap = lmp_list.nswap;
   auto int32_option =
       torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
@@ -150,26 +116,37 @@ void DeepPotPT::update_comm_dict_with_virtual_atoms(
     new_recvnum[s] = recv_count;
   }
 
-  // use 64-bit for int* as sizeof(int*) is supposed to be 8 bytes
+  do_update_comm_dict(lmp_list, new_sendlist, new_sendnum, new_recvnum);
+}
+
+void DeepPotPT::do_update_comm_dict(const InputNlist& lmp_list,
+                                    int** sendlist,
+                                    int* sendnum,
+                                    int* recvnum) {
+  int nswap = lmp_list.nswap;
+  auto int32_option =
+      torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
+  auto int64_option =
+      torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt64);
+
   torch::Tensor sendlist_tensor =
-      torch::from_blob(static_cast<void*>(new_sendlist), {nswap}, int64_option);
-  torch::Tensor sendnum_tensor =
-      torch::from_blob(new_sendnum, {nswap}, int32_option);
-  torch::Tensor recvnum_tensor =
-      torch::from_blob(new_recvnum, {nswap}, int32_option);
+      torch::from_blob(static_cast<void*>(sendlist), {nswap}, int64_option);
+  torch::Tensor sendnum_tensor = torch::from_blob(sendnum, {nswap}, int32_option);
+  torch::Tensor recvnum_tensor = torch::from_blob(recvnum, {nswap}, int32_option);
   torch::Tensor sendproc_tensor =
       torch::from_blob(lmp_list.sendproc, {nswap}, int32_option);
   torch::Tensor recvproc_tensor =
       torch::from_blob(lmp_list.recvproc, {nswap}, int32_option);
+
   torch::Tensor communicator_tensor;
   static std::int64_t null_communicator = 0;
   if (lmp_list.world == nullptr) {
-    communicator_tensor =
-        torch::from_blob(&null_communicator, {1}, torch::kInt64);
+    communicator_tensor = torch::from_blob(&null_communicator, {1}, torch::kInt64);
   } else {
     communicator_tensor =
         torch::from_blob(const_cast<void*>(lmp_list.world), {1}, torch::kInt64);
   }
+
   comm_dict.insert_or_assign("send_list", sendlist_tensor);
   comm_dict.insert_or_assign("send_proc", sendproc_tensor);
   comm_dict.insert_or_assign("recv_proc", recvproc_tensor);
@@ -355,9 +332,10 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
     nlist_data.padding();
     if (do_message_passing) {
       if (has_null_atoms) {
-        update_comm_dict_with_virtual_atoms(lmp_list, fwd_map, nall_real);
+        update_comm_dict_with_virtual_atoms(lmp_list, fwd_map);
       } else {
-        update_comm_dict(lmp_list);
+        do_update_comm_dict(lmp_list, lmp_list.sendlist, lmp_list.sendnum,
+                            lmp_list.recvnum);
       }
     }
     if (lmp_list.mapping) {
