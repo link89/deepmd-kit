@@ -61,6 +61,9 @@ void DeepPotPT::update_comm_dict(
       torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
 
   if (comm_maxswap < nswap) {
+    std::cerr << "[update_comm_dict] grow buffer: comm_maxswap=" << comm_maxswap
+              << " -> nswap=" << nswap << std::endl;
+
     for (int i = 0; i < comm_maxswap; ++i) {
       delete[] new_sendlist[i];
     }
@@ -75,13 +78,18 @@ void DeepPotPT::update_comm_dict(
     new_sendnum = new int[comm_maxswap];
     new_recvnum = new int[comm_maxswap];
     new_sendlist_capacity = new int[comm_maxswap];
+    std::fill(new_sendlist_capacity, new_sendlist_capacity + comm_maxswap, 0);
   }
 
   // Remap sendlist from original LAMMPS atom indices to real-atom indices,
   // skipping virtual (NULL-type) atoms where fwd_map[orig] == -1.
   for (int s = 0; s < nswap; ++s) {
     int orig_sendnum = lmp_list.sendnum[s];
+    // grow sendlist if needed
     if (new_sendlist_capacity[s] < orig_sendnum) {
+      std::cerr << "[update_comm_dict] grow sendlist for swap[" << s
+                << "], capacity=" << new_sendlist_capacity[s]
+                << " -> orig_sendnum=" << orig_sendnum << std::endl;
       delete[] new_sendlist[s];
       new_sendlist[s] = new int[orig_sendnum];
       new_sendlist_capacity[s] = orig_sendnum;
