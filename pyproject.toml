@@ -454,9 +454,6 @@ runtime-evaluated-base-classes = ["torch.nn.Module"]
 
 [tool.pytest.ini_options]
 markers = "run"
-addopts = ["-s"]
-log_cli = true
-log_cli_level = "DEBUG"
 
 [tool.coverage.run]
 plugins = ["source.3rdparty.coverage_plugins.jit_plugin"]
