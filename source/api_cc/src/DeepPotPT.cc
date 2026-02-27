@@ -93,11 +93,13 @@ void DeepPotPT::update_comm_dict(
       std::cerr << "[update_comm_dict] grow sendlist for swap[" << s
                 << "], capacity=" << new_sendlist_capacity[s]
                 << " -> orig_sendnum=" << orig_sendnum << std::endl;
-      if (new_sendlist_capacity[s] > 0) {
+      if (new_sendlist_capacity[s] >= 0) {
         delete[] new_sendlist[s];
       }
-      new_sendlist[s] = new int[orig_sendnum];
-      new_sendlist_capacity[s] = orig_sendnum;
+      // allocate at least 128 entries to avoid frequent reallocations for small sendnum
+      int capacity = std::max(orig_sendnum, 128);
+      new_sendlist[s] = new int[capacity];
+      new_sendlist_capacity[s] = capacity;
     }
 
     int send_count = 0;
@@ -136,10 +138,10 @@ void DeepPotPT::update_comm_dict(
               << "] recvnum: " << orig_recvnum << " -> " << recv_count
               << " (firstrecv=" << firstrecv << ")" << std::endl;
   }
-  // FIXME: here assuming the size of pointer is 64 bits, which may not be true for some platforms
+
+  // use 64-bit for int* as sizeof(int*) is supposed to be 8 bytes
   torch::Tensor sendlist_tensor =
       torch::from_blob(static_cast<void*>(new_sendlist), {nswap}, int64_option);
-
   torch::Tensor sendnum_tensor =
       torch::from_blob(new_sendnum, {nswap}, int32_option);
   torch::Tensor recvnum_tensor =
