@@ -75,12 +75,6 @@ void DeepPotPT::update_comm_dict(
     new_sendnum = new int[comm_maxswap];
     new_recvnum = new int[comm_maxswap];
     new_sendlist_capacity = new int[comm_maxswap];
-    for (int i = 0; i < comm_maxswap; ++i) {
-      new_sendlist[i] = nullptr;
-      new_sendnum[i] = 0;
-      new_recvnum[i] = 0;
-      new_sendlist_capacity[i] = 0;
-    }
   }
 
   // Remap sendlist from original LAMMPS atom indices to real-atom indices,
