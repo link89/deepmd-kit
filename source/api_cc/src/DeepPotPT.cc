@@ -5,7 +5,6 @@
 #include <torch/csrc/autograd/profiler.h>
 #include <torch/csrc/jit/runtime/jit_exception.h>
 
-#include <algorithm>
 #include <cstdint>
 #include <numeric>
 
@@ -62,25 +61,8 @@ void DeepPotPT::update_comm_dict(
       torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
 
   if (comm_maxswap < nswap) {
-    int old_maxswap = comm_maxswap;
-    int new_maxswap = nswap;
-
-    int** grown_sendlist = new int*[new_maxswap];
-    int* grown_sendnum = new int[new_maxswap];
-    int* grown_recvnum = new int[new_maxswap];
-    int* grown_sendlist_capacity = new int[new_maxswap];
-
-    for (int i = 0; i < old_maxswap; ++i) {
-      grown_sendlist[i] = new_sendlist[i];
-      grown_sendnum[i] = new_sendnum[i];
-      grown_recvnum[i] = new_recvnum[i];
-      grown_sendlist_capacity[i] = new_sendlist_capacity[i];
-    }
-    for (int i = old_maxswap; i < new_maxswap; ++i) {
-      grown_sendlist[i] = nullptr;
-      grown_sendnum[i] = 0;
-      grown_recvnum[i] = 0;
-      grown_sendlist_capacity[i] = 0;
+    for (int i = 0; i < comm_maxswap; ++i) {
+      delete[] new_sendlist[i];
     }
 
     delete[] new_sendlist;
@@ -88,11 +70,17 @@ void DeepPotPT::update_comm_dict(
     delete[] new_recvnum;
     delete[] new_sendlist_capacity;
 
-    new_sendlist = grown_sendlist;
-    new_sendnum = grown_sendnum;
-    new_recvnum = grown_recvnum;
-    new_sendlist_capacity = grown_sendlist_capacity;
-    comm_maxswap = new_maxswap;
+    comm_maxswap = nswap;
+    new_sendlist = new int*[comm_maxswap];
+    new_sendnum = new int[comm_maxswap];
+    new_recvnum = new int[comm_maxswap];
+    new_sendlist_capacity = new int[comm_maxswap];
+    for (int i = 0; i < comm_maxswap; ++i) {
+      new_sendlist[i] = nullptr;
+      new_sendnum[i] = 0;
+      new_recvnum[i] = 0;
+      new_sendlist_capacity[i] = 0;
+    }
   }
 
   // Remap sendlist from original LAMMPS atom indices to real-atom indices,
