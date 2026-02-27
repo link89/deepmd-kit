@@ -179,8 +179,8 @@ def convert_pb_to_pbtxt(pbfile: str, pbtxtfile: str) -> None:
     with tf.gfile.GFile(pbfile, "rb") as f:
         graph_def = tf.GraphDef()
         graph_def.ParseFromString(f.read())
-    with open(pbtxtfile, "w") as f:
-        f.write(text_format.MessageToString(graph_def))
+        tf.import_graph_def(graph_def, name="")
+        tf.train.write_graph(graph_def, "./", pbtxtfile, as_text=True)
 
 
 def convert_pbtxt_to_pb(pbtxtfile: str, pbfile: str) -> None:
@@ -198,8 +198,7 @@ def convert_pbtxt_to_pb(pbtxtfile: str, pbfile: str) -> None:
         file_content = f.read()
         # Merges the human-readable string in `file_content` into `graph_def`.
         text_format.Merge(file_content, graph_def)
-    with open(pbfile, "wb") as f:
-        f.write(graph_def.SerializeToString())
+        tf.train.write_graph(graph_def, "./", pbfile, as_text=False)
 
 
 def convert_dp012_to_dp10(file: str) -> None:
