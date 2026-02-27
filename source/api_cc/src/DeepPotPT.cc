@@ -69,9 +69,7 @@ torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
     int count = 0;
     for (int k = 0; k < orig_sendnum; ++k) {
       int orig_idx = lmp_list.sendlist[s][k];
-      int real_idx = (orig_idx >= 0 && orig_idx < (int)fwd_map.size())
-                         ? fwd_map[orig_idx]
-                         : -1;
+      int real_idx = fwd_map[orig_idx];
       std::cerr << "[make_comm_dict] swap[" << s << "] k=" << k
                 << " orig_idx=" << orig_idx << " real_idx=" << real_idx
                 << (real_idx >= 0 ? " (kept)" : " (skipped, virtual)")
