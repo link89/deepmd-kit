@@ -63,10 +63,11 @@ torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
   // Remap sendlist from original LAMMPS atom indices to real-atom indices,
   // skipping virtual (NULL-type) atoms where fwd_map[orig] == -1.
   std::vector<int32_t> new_sendnum(nswap, 0);
+  std::vector<int32_t> new_recvsum(nswap, 0);
   std::vector<int32_t> flat_sendlist;
   for (int s = 0; s < nswap; ++s) {
     int orig_sendnum = lmp_list.sendnum[s];
-    int count = 0;
+    int send_count = 0;
     for (int k = 0; k < orig_sendnum; ++k) {
       int orig_idx = lmp_list.sendlist[s][k];
       int real_idx = fwd_map[orig_idx];
@@ -76,22 +77,40 @@ torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
                 << std::endl;
       if (real_idx >= 0) {
         flat_sendlist.push_back(static_cast<int32_t>(real_idx));
-        ++count;
+        ++send_count;
       }
     }
-    new_sendnum[s] = count;
+    new_sendnum[s] = send_count;
     std::cerr << "[make_comm_dict] swap[" << s
-              << "] sendnum: " << orig_sendnum << " -> " << count << std::endl;
+              << "] sendnum: " << orig_sendnum << " -> " << send_count << std::endl;
+
+    int firstrecv = lmp_list.firstrecv[s];
+    int orig_recvnum = lmp_list.recvnum[s];
+    int recv_count = 0;
+    for (int k = 0; k < orig_recvnum; ++k) {
+      int orig_idx = firstrecv + k;
+      int real_idx = fwd_map[orig_idx];
+      std::cerr << "[make_comm_dict] swap[" << s << "] recv k=" << k
+                << " orig_idx=" << orig_idx << " real_idx=" << real_idx
+                << (real_idx >= 0 ? " (kept)" : " (skipped, virtual)")
+                << std::endl;
+      if (real_idx >= 0) {
+        ++recv_count;
+      }
+    }
+    new_recvsum[s] = recv_count;
+    std::cerr << "[make_comm_dict] swap[" << s
+              << "] recvnum: " << orig_recvnum << " -> " << recv_count
+              << " (firstrecv=" << firstrecv << ")" << std::endl;
   }
 
   // Use torch::tensor() to copy data so the tensors own their storage.
-  torch::Tensor sendnum_tensor = torch::tensor(new_sendnum, int32_option);
   torch::Tensor sendlist_tensor =
       flat_sendlist.empty()
           ? torch::zeros({0}, int32_option)
           : torch::tensor(flat_sendlist, int32_option);
-  torch::Tensor recvnum_tensor =
-      torch::from_blob(lmp_list.recvnum, {nswap}, int32_option).clone();
+  torch::Tensor sendnum_tensor = torch::tensor(new_sendnum, int32_option);
+  torch::Tensor recvnum_tensor = torch::tensor(new_recvsum, int32_option);
   torch::Tensor sendproc_tensor =
       torch::from_blob(lmp_list.sendproc, {nswap}, int32_option).clone();
   torch::Tensor recvproc_tensor =
