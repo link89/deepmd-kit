@@ -59,6 +59,8 @@ void DeepPotPT::update_comm_dict(
 
   auto int32_option =
       torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
+  auto int64_option =
+      torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt64);
 
   if (comm_maxswap < nswap) {
     std::cerr << "[update_comm_dict] grow buffer: comm_maxswap=" << comm_maxswap
@@ -78,7 +80,8 @@ void DeepPotPT::update_comm_dict(
     new_sendnum = new int[comm_maxswap];
     new_recvnum = new int[comm_maxswap];
     new_sendlist_capacity = new int[comm_maxswap];
-    std::fill(new_sendlist_capacity, new_sendlist_capacity + comm_maxswap, 0);
+    // fill new_sendlist_capacity with -1 to indicate uninitialized
+    std::fill(new_sendlist_capacity, new_sendlist_capacity + comm_maxswap, -1);
   }
 
   // Remap sendlist from original LAMMPS atom indices to real-atom indices,
@@ -90,7 +93,9 @@ void DeepPotPT::update_comm_dict(
       std::cerr << "[update_comm_dict] grow sendlist for swap[" << s
                 << "], capacity=" << new_sendlist_capacity[s]
                 << " -> orig_sendnum=" << orig_sendnum << std::endl;
-      delete[] new_sendlist[s];
+      if (new_sendlist_capacity[s] > 0) {
+        delete[] new_sendlist[s];
+      }
       new_sendlist[s] = new int[orig_sendnum];
       new_sendlist_capacity[s] = orig_sendnum;
     }
@@ -131,9 +136,10 @@ void DeepPotPT::update_comm_dict(
               << "] recvnum: " << orig_recvnum << " -> " << recv_count
               << " (firstrecv=" << firstrecv << ")" << std::endl;
   }
-
+  // FIXME: here assuming the size of pointer is 64 bits, which may not be true for some platforms
   torch::Tensor sendlist_tensor =
-      torch::from_blob(static_cast<void*>(new_sendlist), {nswap}, int32_option);
+      torch::from_blob(static_cast<void*>(new_sendlist), {nswap}, int64_option);
+
   torch::Tensor sendnum_tensor =
       torch::from_blob(new_sendnum, {nswap}, int32_option);
   torch::Tensor recvnum_tensor =
