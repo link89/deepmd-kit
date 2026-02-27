@@ -5,6 +5,7 @@
 #include <torch/csrc/autograd/profiler.h>
 #include <torch/csrc/jit/runtime/jit_exception.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <numeric>
 
@@ -60,13 +61,50 @@ void DeepPotPT::update_comm_dict(
   auto int32_option =
       torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
 
+  if (comm_maxswap < nswap) {
+    int old_maxswap = comm_maxswap;
+    int new_maxswap = nswap;
+
+    int** grown_sendlist = new int*[new_maxswap];
+    int* grown_sendnum = new int[new_maxswap];
+    int* grown_recvnum = new int[new_maxswap];
+    int* grown_sendlist_capacity = new int[new_maxswap];
+
+    for (int i = 0; i < old_maxswap; ++i) {
+      grown_sendlist[i] = new_sendlist[i];
+      grown_sendnum[i] = new_sendnum[i];
+      grown_recvnum[i] = new_recvnum[i];
+      grown_sendlist_capacity[i] = new_sendlist_capacity[i];
+    }
+    for (int i = old_maxswap; i < new_maxswap; ++i) {
+      grown_sendlist[i] = nullptr;
+      grown_sendnum[i] = 0;
+      grown_recvnum[i] = 0;
+      grown_sendlist_capacity[i] = 0;
+    }
+
+    delete[] new_sendlist;
+    delete[] new_sendnum;
+    delete[] new_recvnum;
+    delete[] new_sendlist_capacity;
+
+    new_sendlist = grown_sendlist;
+    new_sendnum = grown_sendnum;
+    new_recvnum = grown_recvnum;
+    new_sendlist_capacity = grown_sendlist_capacity;
+    comm_maxswap = new_maxswap;
+  }
+
   // Remap sendlist from original LAMMPS atom indices to real-atom indices,
   // skipping virtual (NULL-type) atoms where fwd_map[orig] == -1.
-  std::vector<int32_t> new_sendnum(nswap, 0);
-  std::vector<int32_t> new_recvsum(nswap, 0);
-  std::vector<int32_t> flat_sendlist;
   for (int s = 0; s < nswap; ++s) {
     int orig_sendnum = lmp_list.sendnum[s];
+    if (new_sendlist_capacity[s] < orig_sendnum) {
+      delete[] new_sendlist[s];
+      new_sendlist[s] = new int[orig_sendnum];
+      new_sendlist_capacity[s] = orig_sendnum;
+    }
+
     int send_count = 0;
     for (int k = 0; k < orig_sendnum; ++k) {
       int orig_idx = lmp_list.sendlist[s][k];
@@ -76,7 +114,7 @@ void DeepPotPT::update_comm_dict(
                 << (real_idx >= 0 ? " (kept)" : " (skipped, virtual)")
                 << std::endl;
       if (real_idx >= 0) {
-        flat_sendlist.push_back(static_cast<int32_t>(real_idx));
+        new_sendlist[s][send_count] = real_idx;
         ++send_count;
       }
     }
@@ -98,31 +136,32 @@ void DeepPotPT::update_comm_dict(
         ++recv_count;
       }
     }
-    new_recvsum[s] = recv_count;
+    new_recvnum[s] = recv_count;
     std::cerr << "[update_comm_dict] swap[" << s
               << "] recvnum: " << orig_recvnum << " -> " << recv_count
               << " (firstrecv=" << firstrecv << ")" << std::endl;
   }
 
-  // Use torch::tensor() to copy data so the tensors own their storage.
   torch::Tensor sendlist_tensor =
-      flat_sendlist.empty()
-          ? torch::zeros({0}, int32_option)
-          : torch::tensor(flat_sendlist, int32_option);
-  torch::Tensor sendnum_tensor = torch::tensor(new_sendnum, int32_option);
-  torch::Tensor recvnum_tensor = torch::tensor(new_recvsum, int32_option);
+      torch::from_blob(static_cast<void*>(new_sendlist), {nswap}, int32_option);
+  torch::Tensor sendnum_tensor =
+      torch::from_blob(new_sendnum, {nswap}, int32_option);
+  torch::Tensor recvnum_tensor =
+      torch::from_blob(new_recvnum, {nswap}, int32_option);
   torch::Tensor sendproc_tensor =
-      torch::from_blob(lmp_list.sendproc, {nswap}, int32_option).clone();
+      torch::from_blob(lmp_list.sendproc, {nswap}, int32_option);
   torch::Tensor recvproc_tensor =
-      torch::from_blob(lmp_list.recvproc, {nswap}, int32_option).clone();
+      torch::from_blob(lmp_list.recvproc, {nswap}, int32_option);
   torch::Tensor communicator_tensor;
+  static std::int64_t null_communicator = 0;
   if (lmp_list.world == nullptr) {
-    communicator_tensor = torch::zeros({1}, torch::kInt64);
+    communicator_tensor =
+        torch::from_blob(&null_communicator, {1}, torch::kInt64);
   } else {
     communicator_tensor =
         torch::from_blob(const_cast<void*>(lmp_list.world), {1},
                          torch::kInt64)
-            .clone();
+            ;
   }
 
   std::cerr << "[update_comm_dict] result:"
@@ -240,6 +279,16 @@ void DeepPotPT::init(const std::string& model,
 }
 
 DeepPotPT::~DeepPotPT() {
+  if (new_sendlist != nullptr) {
+    for (int s = 0; s < comm_maxswap; ++s) {
+      delete[] new_sendlist[s];
+    }
+  }
+  delete[] new_sendlist;
+  delete[] new_sendnum;
+  delete[] new_recvnum;
+  delete[] new_sendlist_capacity;
+
   if (profiler_enabled) {
     auto result = torch::autograd::profiler::disableProfiler();
     if (result) {
