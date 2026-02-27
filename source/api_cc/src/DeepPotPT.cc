@@ -48,6 +48,81 @@ torch::Tensor createNlistTensor(const std::vector<std::vector<int>>& data) {
   int nnei = nloc > 0 ? total_size / nloc : 0;
   return flat_tensor.view({1, nloc, nnei});
 }
+
+torch::Dict<std::string, torch::Tensor> DeepPotPT::make_comm_dict(
+    const InputNlist& lmp_list,
+    const std::vector<int>& fwd_map,
+    int nall_real) {
+  int nswap = lmp_list.nswap;
+  std::cerr << "[make_comm_dict] nswap=" << nswap
+            << " nall_real=" << nall_real << std::endl;
+
+  auto int32_option =
+      torch::TensorOptions().device(torch::kCPU).dtype(torch::kInt32);
+
+  // Remap sendlist from original LAMMPS atom indices to real-atom indices,
+  // skipping virtual (NULL-type) atoms where fwd_map[orig] == -1.
+  std::vector<int32_t> new_sendnum(nswap, 0);
+  std::vector<int32_t> flat_sendlist;
+  for (int s = 0; s < nswap; ++s) {
+    int orig_sendnum = lmp_list.sendnum[s];
+    int count = 0;
+    for (int k = 0; k < orig_sendnum; ++k) {
+      int orig_idx = lmp_list.sendlist[s][k];
+      int real_idx = (orig_idx >= 0 && orig_idx < (int)fwd_map.size())
+                         ? fwd_map[orig_idx]
+                         : -1;
+      std::cerr << "[make_comm_dict] swap[" << s << "] k=" << k
+                << " orig_idx=" << orig_idx << " real_idx=" << real_idx
+                << (real_idx >= 0 ? " (kept)" : " (skipped, virtual)")
+                << std::endl;
+      if (real_idx >= 0) {
+        flat_sendlist.push_back(static_cast<int32_t>(real_idx));
+        ++count;
+      }
+    }
+    new_sendnum[s] = count;
+    std::cerr << "[make_comm_dict] swap[" << s
+              << "] sendnum: " << orig_sendnum << " -> " << count << std::endl;
+  }
+
+  // Use torch::tensor() to copy data so the tensors own their storage.
+  torch::Tensor sendnum_tensor = torch::tensor(new_sendnum, int32_option);
+  torch::Tensor sendlist_tensor =
+      flat_sendlist.empty()
+          ? torch::zeros({0}, int32_option)
+          : torch::tensor(flat_sendlist, int32_option);
+  torch::Tensor recvnum_tensor =
+      torch::from_blob(lmp_list.recvnum, {nswap}, int32_option).clone();
+  torch::Tensor sendproc_tensor =
+      torch::from_blob(lmp_list.sendproc, {nswap}, int32_option).clone();
+  torch::Tensor recvproc_tensor =
+      torch::from_blob(lmp_list.recvproc, {nswap}, int32_option).clone();
+  torch::Tensor communicator_tensor;
+  if (lmp_list.world == nullptr) {
+    communicator_tensor = torch::zeros({1}, torch::kInt64);
+  } else {
+    communicator_tensor =
+        torch::from_blob(const_cast<void*>(lmp_list.world), {1},
+                         torch::kInt64)
+            .clone();
+  }
+
+  std::cerr << "[make_comm_dict] result:"
+            << " send_num=" << sendnum_tensor
+            << " send_list=" << sendlist_tensor
+            << " recv_num=" << recvnum_tensor << std::endl;
+
+  torch::Dict<std::string, torch::Tensor> dict;
+  dict.insert("send_list", sendlist_tensor);
+  dict.insert("send_proc", sendproc_tensor);
+  dict.insert("recv_proc", recvproc_tensor);
+  dict.insert("send_num", sendnum_tensor);
+  dict.insert("recv_num", recvnum_tensor);
+  dict.insert("communicator", communicator_tensor);
+  return dict;
+}
+
 DeepPotPT::DeepPotPT() : inited(false) {}
 DeepPotPT::DeepPotPT(const std::string& model,
                      const int& gpu_rank,
@@ -245,57 +320,21 @@ void DeepPotPT::compute(ENERGYVTYPE& ener,
       int nswap = lmp_list.nswap;
       std::cerr << "[DeepPotPT::compute] do_message_passing=true, nswap="
                 << nswap << std::endl;
-      torch::Tensor sendproc_tensor =
-          torch::from_blob(lmp_list.sendproc, {nswap}, int32_option);
-      torch::Tensor recvproc_tensor =
-          torch::from_blob(lmp_list.recvproc, {nswap}, int32_option);
-      torch::Tensor firstrecv_tensor =
-          torch::from_blob(lmp_list.firstrecv, {nswap}, int32_option);
-      torch::Tensor recvnum_tensor =
-          torch::from_blob(lmp_list.recvnum, {nswap}, int32_option);
-      torch::Tensor communicator_tensor;
-      if (lmp_list.world == 0) {
-        communicator_tensor = torch::empty({1}, torch::kInt64);
-      } else {
-        communicator_tensor = torch::from_blob(
-            const_cast<void*>(lmp_list.world), {1}, torch::kInt64);
-      }
-
-      torch::Tensor nswap_tensor = torch::tensor(nswap, int32_option);
-      torch::Tensor sendnum_tensor =
-          torch::from_blob(lmp_list.sendnum, {nswap}, int32_option);
-      int total_send =
-          std::accumulate(lmp_list.sendnum, lmp_list.sendnum + nswap, 0);
-      std::cerr << "[DeepPotPT::compute] total_send=" << total_send
-                << std::endl;
-      torch::Tensor sendlist_tensor =
-          torch::from_blob(lmp_list.sendlist, {total_send}, int32_option);
-      comm_dict.insert_or_assign("send_list", sendlist_tensor);
-      comm_dict.insert_or_assign("send_proc", sendproc_tensor);
-      comm_dict.insert_or_assign("recv_proc", recvproc_tensor);
-      comm_dict.insert_or_assign("send_num", sendnum_tensor);
-      comm_dict.insert_or_assign("recv_num", recvnum_tensor);
-      comm_dict.insert_or_assign("communicator", communicator_tensor);
-      // Print full comm_dict contents for debugging
-      std::cerr << "[DeepPotPT::compute] DIAG comm_dict contents:" << std::endl;
-      std::cerr << "  send_proc=" << sendproc_tensor << std::endl;
-      std::cerr << "  recv_proc=" << recvproc_tensor << std::endl;
-      std::cerr << "  send_num=" << sendnum_tensor << std::endl;
-      std::cerr << "  recv_num=" << recvnum_tensor << std::endl;
-      std::cerr << "  firstrecv=" << firstrecv_tensor << std::endl;
-      std::cerr << "  send_list (flat blob, size=" << total_send << "):" << std::endl;
+      // Print original sendlist for diagnostics
       for (int s = 0; s < nswap; ++s) {
-        std::cerr << "    swap[" << s << "] sendnum=" << lmp_list.sendnum[s]
+        std::cerr << "  swap[" << s << "] sendnum=" << lmp_list.sendnum[s]
                   << " recvnum=" << lmp_list.recvnum[s]
                   << " sendproc=" << lmp_list.sendproc[s]
                   << " recvproc=" << lmp_list.recvproc[s] << std::endl;
         for (int k = 0; k < lmp_list.sendnum[s]; ++k) {
           std::cerr << "      sendlist[" << s << "][" << k
                     << "]=" << lmp_list.sendlist[s][k]
-                    << (lmp_list.sendlist[s][k] < nall_real ? " (valid)" : " (OOB!)")
+                    << (lmp_list.sendlist[s][k] < nall_real ? " (valid)"
+                                                            : " (OOB!)")
                     << std::endl;
         }
       }
+      comm_dict = make_comm_dict(lmp_list, fwd_map, nall_real);
     }
     if (lmp_list.mapping) {
       std::vector<std::int64_t> mapping(nall_real);
